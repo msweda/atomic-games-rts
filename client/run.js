@@ -1,16 +1,15 @@
 const NodeClient = require('./node-client');
-const astar = require('./astar');
+var PF = require('pathfinding');
 
-let ip = process.argv.length > 2 ? process.argv[2] : '127.0.0.1';
+let ip = process.argv.length > 2 ? process.argv[2] : '0.0.0.0';
 let port = process.argv.length > 3 ? process.argv[3] : '9090';
 let map_width = 30;
-
 
 let map = new Array(60);
 for (let x = 0; x < 60; x++) {
     map[x] = new Array(60);
     for (let y = 0; y < 60; y++) {
-        map [x][y] = 1;
+        map [x][y] = 0;
     }
 }
 
@@ -19,27 +18,72 @@ let resources = {};
 let enemy_units = {};
 let enemy_base = {};
 let myUnits = {};
+let paths = {};
+
+// Moving from x,y to x2, y2
+function findDirection(x1, y1, x2, y2) {
+    let dir = "";
+    if (x2 - x1 > 0) {
+        dir = "E";
+    }
+    else if (x2 - x1 < 0){
+        dir = "W";
+    }
+    else if (y2 - y1 > 0) {
+        dir = "S";
+    }
+    else if (y2 - y1 < 0) {
+        dir = "N";
+    }
+    return dir;
+}
+
+function findPathToResource(unit) {
+    // Create a graph from the map.
+    let graph = new PF.Grid(map);
+    // Find the starting position.
+    let startX = unit.x + map_width - 1;
+    let startY = unit.y + map_width - 1;
+    // Get the first available resource.
+    let nextResource = resources[Object.keys(resources)[0]];
+    // Find the location of that resource.
+    let endX = nextResource.x + map_width - 1;
+    let endY = nextResource.y + map_width - 1;
+    // Search for a route to the resource.
+    let finder = new PF.AStarFinder();
+    let path = finder.findPath(startX, startY, endX, endY, graph);
+
+    paths[unit.id] = {
+        path: path,
+        step: 0
+    }
+}
+
+function findPathToBase(unit) {
+    // Create a graph from the map.
+    let graph = new PF.Grid(map);
+    // Find the starting position.
+    let startX = unit.x + map_width - 1;
+    let startY = unit.y + map_width - 1;
+    // Find the location of the base.
+    let endX = map_width - 1;
+    let endY = map_width - 1;
+    // Search for a route to the resource.
+    let finder = new PF.AStarFinder();
+    let path = finder.findPath(startX, startY, endX, endY, graph);
+
+    paths[unit.id] = {
+        path: path,
+        step: 0
+    }
+}
 
 let client = new NodeClient(ip, port, dataUpdates => {
-    //console.log(dataUpdates);
     updateMap(dataUpdates, visited_tiles, enemy_units, enemy_base, dataUpdates.turn);
-
-    // for (let y = 0; y < 60; y++) {
-    //     let row = "";
-    //     for (let x = 0; x < 60; x++) {
-    //         row += map [x][y];
-    //     }
-    //     console.log(row);
-    // }
-    // console.log("\n\n\n\n");
-
-    //console.log(resources);
-
     updateUnits(dataUpdates, myUnits);
 }, () => {
 
     let cmds = generateCommands(myUnits, visited_tiles, resources, enemy_units, enemy_base);
-    //console.log(cmds);
     return cmds;
 });
 
@@ -64,7 +108,7 @@ function updateMap(dataUpdates, visited_tiles, enemy_units, enemy_base, currentT
         // Set the tipe type for later reference.
         let tile_type = "free";
         // Mark the space as walkable.
-        map[currentTile.x + map_width - 1][currentTile.y + map_width - 1] = 1;
+        map[currentTile.x + map_width - 1][currentTile.y + map_width - 1] = 0;
 
         if (currentTile.resources != null) {
             tile_type = "resource";
@@ -74,7 +118,9 @@ function updateMap(dataUpdates, visited_tiles, enemy_units, enemy_base, currentT
         else if (currentTile.blocked) {
             tile_type = "wall";
             // Mark the space as not-walkable.
-            map[currentTile.x + map_width - 1][currentTile.y + map_width - 1] = 0;
+            map[currentTile.x + map_width - 1][currentTile.y + map_width - 1] = 1;
+            // Reset paths.
+            paths = {};
         }
         else if (typeof currentTile.units != 'undefined') {
             if (currentTile.units.length > 0) {
@@ -141,6 +187,83 @@ function generateCommands(units, visited_tiles, resources, enemy_units, enemy_ba
         if (unit.type == 'base') {
         }
         else if (unit.type == 'worker') {
+            if (unit.resource > 0) {
+
+                commands.push({
+                   command: 'MOVE',
+                   dir: ['N','E','S','W'][Math.floor(Math.random() * 4)],
+                   unit: unit.id
+                });
+
+                // if (typeof paths[unit.id] == 'undefined' || paths[unit.id] == null) {
+                //     findPathToBase(unit);
+                // }
+                //
+                // let step = paths[unit.id].step;
+                //
+                // if (step < paths[unit.id].path.length) {
+                //     let shipX = unit.x + map_width - 1;
+                //     let shipY = unit.y + map_width - 1;
+                //     let nextPoint = paths[unit.id].path[step];
+                //     let nextX = nextPoint[0];
+                //     let nextY = nextPoint[1];
+                //     let nextDirection = findDirection(shipX, shipY, nextX, nextY);
+                //     paths[unit.id].step++;
+                //
+                //     commands.push({
+                //         command: 'MOVE',
+                //         dir: nextDirection,
+                //         unit: unit.id
+                //     });
+                // }
+            }
+            else {
+                if (unit.status == 'idle') {
+                    if (Object.keys(resources).length == 0) {
+                        return [{
+                            command: 'MOVE',
+                            dir: ['N','E','S','W'][Math.floor(Math.random() * 4)],
+                            unit: unit.id
+                        }];
+                    }
+                    else {
+                        if (typeof paths[unit.id] == 'undefined' || paths[unit.id] == null) {
+                            findPathToResource(unit);
+                        }
+
+                        let step = paths[unit.id].step;
+
+                        if (step < paths[unit.id].path.length) {
+                            let shipX = unit.x + map_width - 1;
+                            let shipY = unit.y + map_width - 1;
+                            let nextPoint = paths[unit.id].path[step];
+                            let nextX = nextPoint[0];
+                            let nextY = nextPoint[1];
+                            let nextDirection = findDirection(shipX, shipY, nextX, nextY);
+                            paths[unit.id].step++;
+
+                            if (paths[unit.id].step == paths[unit.id].path.length) {
+                                commands.push({
+                                    command: 'GATHER',
+                                    dir: nextDirection,
+                                    unit: unit.id
+                                });
+
+                                paths[unit.id] = null;
+                            }
+                            else {
+                                commands.push({
+                                    command: 'MOVE',
+                                    dir: nextDirection,
+                                    unit: unit.id
+                                });
+                            }
+                        }
+                    }
+                }
+                else if (unit.status == 'moving') {
+                }
+            }
         }
         else if (unit.type == 'scout') {
         }
@@ -150,11 +273,6 @@ function generateCommands(units, visited_tiles, resources, enemy_units, enemy_ba
     }
 
     return commands;
-    // return [{
-    //     command: 'MOVE',
-    //     dir: ['N','E','S','W'][Math.floor(Math.random() * 4)],
-    //     unit: units[Math.floor(Math.random() * units.length)]
-    // }];
 }
 
 /* Structure...
