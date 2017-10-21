@@ -1,5 +1,5 @@
 const NodeClient = require('./node-client');
-const Utils = require('./utils');
+const astar = require('./astar');
 
 let ip = process.argv.length > 2 ? process.argv[2] : '127.0.0.1';
 let port = process.argv.length > 3 ? process.argv[3] : '9090';
@@ -18,8 +18,7 @@ let visited_tiles = {};
 let resources = {};
 let enemy_units = {};
 let enemy_base = {};
-
-let myUnits = [];
+let myUnits = {};
 
 let client = new NodeClient(ip, port, dataUpdates => {
     //console.log(dataUpdates);
@@ -36,7 +35,7 @@ let client = new NodeClient(ip, port, dataUpdates => {
 
     //console.log(resources);
 
-    myUnits = updateUnits(dataUpdates, myUnits);
+    updateUnits(dataUpdates, myUnits);
 }, () => {
 
     let cmds = generateCommands(myUnits, visited_tiles, resources, enemy_units, enemy_base);
@@ -121,18 +120,10 @@ function updateUnits(dataUpdates, units) {
         return;
     }
 
-    let updatedUnits = [];
-
     for (let u = 0; u < dataUpdates.unit_updates.length; u++) {
         let currentUnit = dataUpdates.unit_updates[u];
-        let unit = {
-
-        }
-
-        updatedUnits.push(unit);
+        units[currentUnit.id] = currentUnit;
     }
-
-    return updatedUnits;
 
     // let ids = units.concat(dataUpdates.unit_updates.map(u => u.id));
     // return ids.filter((val, idx) => ids.indexOf(val) === idx);
@@ -144,13 +135,18 @@ function generateCommands(units, visited_tiles, resources, enemy_units, enemy_ba
     }
 
     let commands = [];
-    for (let u = 0; u < units.length; u++) {
-        unit = units[u];
+    for (let unitId in units) {
+        let unit = units[unitId];
 
-        if (unit.type == 'worker') {
-            console.log("HI IM A WORKER");
+        if (unit.type == 'base') {
         }
-        else if (unit.type == '')
+        else if (unit.type == 'worker') {
+        }
+        else if (unit.type == 'scout') {
+        }
+        else if (unit.type == 'tank') {
+
+        }
     }
 
     return commands;
