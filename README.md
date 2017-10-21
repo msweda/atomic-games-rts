@@ -130,6 +130,9 @@ __TANK__: Tanks have average vision, slower speed, higher health, and a ranged a
 | scout  | 130  | 5     | 3     | 5      | 3 | 1 | 10 |
 | tank   | 150  | 2     | 10    | 20     | 7 | 4 | 15 |
 
+Range: worker and tank can attack anything in a 5x5 radius
+Can attack in a diagonal--must know enemy unit id
+
 <sup>*</sup>__turns per tile (tpt):__ Number of turns required to move from one grid location to the next. Smaller is faster.
 
 ***
