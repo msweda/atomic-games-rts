@@ -1,314 +1,217 @@
+const Pathfinding = require('pathfinding');
 const NodeClient = require('./node-client');
-var PF = require('pathfinding');
+const Utils = require('./utils');
 
-let ip = process.argv.length > 2 ? process.argv[2] : '0.0.0.0';
+let ip = process.argv.length > 2 ? process.argv[2] : '127.0.0.1';
 let port = process.argv.length > 3 ? process.argv[3] : '9090';
-let map_width = 30;
 
-let map = new Array(60);
-for (let x = 0; x < 60; x++) {
-    map[x] = new Array(60);
-    for (let y = 0; y < 60; y++) {
-        map [x][y] = 0;
-    }
-}
+// Information about the game.
+let gameInfo;
+let map;
+let mapUnits = {};
 
-let visited_tiles = {};
-let resources = {};
-let enemy_units = {};
-let enemy_base = {};
-let myUnits = {};
-let paths = {};
+// Variables to control strategy.
+let currentStrategy;
 
-// Moving from x,y to x2, y2
-function findDirection(x1, y1, x2, y2) {
-    let dir = "";
-    if (x2 - x1 > 0) {
-        dir = "E";
-    }
-    else if (x2 - x1 < 0){
-        dir = "W";
-    }
-    else if (y2 - y1 > 0) {
-        dir = "S";
-    }
-    else if (y2 - y1 < 0) {
-        dir = "N";
-    }
-    return dir;
-}
+const STRAT_EXPLORE = 0;
+const STRAT_MINE = 1;
+const STRAT_ATTACK = 2;
+const STRAT_DEFEND = 3;
 
-function findPathToResource(unit) {
-    // Create a graph from the map.
-    let graph = new PF.Grid(map);
-    // Find the starting position.
-    let startX = unit.x + map_width - 1;
-    let startY = unit.y + map_width - 1;
-    // Get the first available resource.
-    let nextResource = resources[Object.keys(resources)[0]];
-    // Find the location of that resource.
-    let endX = nextResource.x + map_width - 1;
-    let endY = nextResource.y + map_width - 1;
-    // Search for a route to the resource.
-    let finder = new PF.AStarFinder();
-    let path = finder.findPath(startX, startY, endX, endY, graph);
+// Base strategy variables.
+let countToCreate = {
+    workers: 0,
+    scouts: 0,
+    tanks: 0
+};
+let isWaitingToBuild = false;
 
-    paths[unit.id] = {
-        path: path,
-        step: 0
-    }
-}
+// // Worker strategy variables.
+// let workerActionWeights = {
+//     move: 10,
+//     gather: 10,
+//     melee: 10
+// };
 
-function findPathToBase(unit) {
-    // Create a graph from the map.
-    let graph = new PF.Grid(map);
-    // Find the starting position.
-    let startX = unit.x + map_width - 1;
-    let startY = unit.y + map_width - 1;
-    // Find the location of the base.
-    let endX = map_width - 1;
-    let endY = map_width - 1;
-    // Search for a route to the resource.
-    let finder = new PF.AStarFinder();
-    let path = finder.findPath(startX, startY, endX, endY, graph);
-
-    paths[unit.id] = {
-        path: path,
-        step: 0
-    }
-}
-
+// Create a node client that will receive/send instructions from/to the server.
 let client = new NodeClient(ip, port, dataUpdates => {
-    updateMap(dataUpdates, visited_tiles, enemy_units, enemy_base, dataUpdates.turn);
-    updateUnits(dataUpdates, myUnits);
+    // If this is the first turn, initialize the game.
+    if (dataUpdates.turn == 0) {
+        initGame(dataUpdates);
+    }
+    updateMap(dataUpdates, map);
+    updateUnits(dataUpdates, mapUnits);
 }, () => {
-
-    let cmds = generateCommands(myUnits, visited_tiles, resources, enemy_units, enemy_base);
+    let cmds = generateCommands(map, mapUnits);
     return cmds;
 });
 
-function updateMap(dataUpdates, visited_tiles, enemy_units, enemy_base, currentTurn) {
-    if (typeof dataUpdates.tile_updates == 'undefined') {
-        return;
+function changeStrategyTo(newStrategy) {
+    // Set variables according to the new strategy.
+    if (newStrategy == STRAT_EXPLORE) {
+        countToCreate.scouts = 4;
     }
+    else if (newStrategy == STRAT_MINE) {
 
+    }
+    else if (newStrategy == STRAT_ATTACK) {
+
+    }
+    else if (newStrategy == STRAT_DEFEND) {
+
+    }
+    return newStrategy;
+}
+
+function initGame(dataUpdates) {
+    // Store initial game info for later use.
+    gameInfo = dataUpdates.game_info;
+
+    // Initialize the map.
+    map = Utils.CreateMap(gameInfo.map_width, gameInfo.map_height);
+
+    // Set the initial strategy.
+    currentStrategy = changeStrategyTo(STRAT_EXPLORE);
+
+}
+
+function updateMap(dataUpdates, map) {
+    // For debugging input.
+    //console.log(dataUpdates.tile_updates);
+
+    // Loop through each tile update.
     for (let i = 0; i < dataUpdates.tile_updates.length; i++) {
+        // Declare a variable for easy reference of the current tile.
         let currentTile = dataUpdates.tile_updates[i];
-
-        // If the tile is not yet known, add it.
-        if (!(currentTile.x in visited_tiles)) {
-            visited_tiles[currentTile.x] = {};
+        // Overwrite the map info.
+        let currentTileX = Utils.ToAbsoluteCoordinate(currentTile.x, gameInfo.map_width);
+        let currentTileY = Utils.ToAbsoluteCoordinate(currentTile.y, gameInfo.map_height);
+        // If we can see the tile, store all the known information.
+        if (currentTile.visible == true) {
+            map[currentTileX][currentTileY] = currentTile;
         }
-        if (!(currentTile.y in visited_tiles[currentTile.x])) {
-            visited_tiles[currentTile.x][currentTile.y] = {};
-        }
-
-        // Set which turn the tile was visited.
-        visited_tiles[currentTile.x][currentTile.y].visitedOnTurn = currentTurn;
-        // Set the tipe type for later reference.
-        let tile_type = "free";
-        // Mark the space as walkable.
-        map[currentTile.x + map_width - 1][currentTile.y + map_width - 1] = 0;
-
-        if (currentTile.resources != null) {
-            tile_type = "resource";
-            // Mark the space as not-walkable.
-            // map[currentTile.x + map_width - 1][currentTile.y + map_width - 1] = 0;
-        }
-        else if (currentTile.blocked) {
-            tile_type = "wall";
-            // Mark the space as not-walkable.
-            map[currentTile.x + map_width - 1][currentTile.y + map_width - 1] = 1;
-            // Reset paths.
-            paths = {};
-        }
-        else if (typeof currentTile.units != 'undefined') {
-            if (currentTile.units.length > 0) {
-                tile_type = "enemy units";
-            }
-        }
-
-        visited_tiles[currentTile.x][currentTile.y].tile_type = tile_type;
-
-        // Add the tile to the relevant map.
-        if (tile_type == "resource") {
-            resources[currentTile.resources.id] = {
-                x: currentTile.x,
-                y: currentTile.y,
-                type: currentTile.resources.type,
-                total: currentTile.resources.total,
-                value: currentTile.resources.value
-            };
-        }
-        else if (tile_type == "enemy units") {
-            for (let u = 0; u < currentTile.units.length; u++) {
-                currentUnit = currentTile.units[u];
-                if (currentUnit.type == "base") {
-                    enemy_base.x = currentTile.x;
-                    enemy_base.y = currentTile.y;
-                }
-                else {
-                    enemy_units[currentUnit.id] = {
-                          x: currentTile.x,
-                          y: currentTile.y,
-                          type: currentUnit.type,
-                          status: currentUnit.status,
-                          health: currentUnit.health
-                    };
-                }
-            }
+        // However, if we lost sight of the tile, don't forget what we knew.
+        else {
+            // Since this message is only given to tiles that we already know about,
+            // just change the visible value to false.
+            map[currentTileX][currentTileY].visible = false;
         }
     }
+    // For debugging output.
+    //console.log(Utils.FormatMapAsString(map, gameInfo.map_width, gameInfo.map_height));
 }
 
 function updateUnits(dataUpdates, units) {
-    if (typeof dataUpdates.unit_updates == 'undefined') {
-        return;
-    }
+    // Update my units based on data updates
+    for (let i = 0; i < dataUpdates.unit_updates.length; i++) {
+        let currentUnit = dataUpdates.unit_updates[i];
 
-    for (let u = 0; u < dataUpdates.unit_updates.length; u++) {
-        let currentUnit = dataUpdates.unit_updates[u];
+        // Update the units object.
         units[currentUnit.id] = currentUnit;
-    }
 
-    // let ids = units.concat(dataUpdates.unit_updates.map(u => u.id));
-    // return ids.filter((val, idx) => ids.indexOf(val) === idx);
+        // If the unit died, remove it from the object.
+        if (currentUnit.status == 'dead') {
+            delete units[currentUnit.id];
+        }
+    }
 }
 
-function generateCommands(units, visited_tiles, resources, enemy_units, enemy_base) {
-    if (typeof units == 'undefined') {
-        return;
-    }
-
+function generateCommands(map, units) {
     let commands = [];
-    for (let unitId in units) {
-        let unit = units[unitId];
 
-        if (unit.type == 'base') {
+    for (unitId in units) {
+        let currentUnit = units[unitId];
+        let currentCommand = null;
+
+        switch (currentUnit.type) {
+            case 'base':
+                currentCommand = generateBaseCommand(currentUnit);
+                break;
+            case 'worker':
+                currentCommand = generateWorkerCommand(currentUnit);
+                break;
+            case 'scout':
+                currentCommand = generateScoutCommand(currentUnit);
+                break;
+            case 'tank':
+                currentCommand = generateTankCommand(currentUnit);
+                break;
+            default:
+                break;
         }
-        else if (unit.type == 'worker') {
-            if (unit.resource > 0) {
 
-                commands.push({
-                   command: 'MOVE',
-                   dir: ['N','E','S','W'][Math.floor(Math.random() * 4)],
-                   unit: unit.id
-                });
-
-                // if (typeof paths[unit.id] == 'undefined' || paths[unit.id] == null) {
-                //     findPathToBase(unit);
-                // }
-                //
-                // let step = paths[unit.id].step;
-                //
-                // if (step < paths[unit.id].path.length) {
-                //     let shipX = unit.x + map_width - 1;
-                //     let shipY = unit.y + map_width - 1;
-                //     let nextPoint = paths[unit.id].path[step];
-                //     let nextX = nextPoint[0];
-                //     let nextY = nextPoint[1];
-                //     let nextDirection = findDirection(shipX, shipY, nextX, nextY);
-                //     paths[unit.id].step++;
-                //
-                //     commands.push({
-                //         command: 'MOVE',
-                //         dir: nextDirection,
-                //         unit: unit.id
-                //     });
-                // }
-            }
-            else {
-                if (unit.status == 'idle') {
-                    if (Object.keys(resources).length == 0) {
-                        return [{
-                            command: 'MOVE',
-                            dir: ['N','E','S','W'][Math.floor(Math.random() * 4)],
-                            unit: unit.id
-                        }];
-                    }
-                    else {
-                        if (typeof paths[unit.id] == 'undefined' || paths[unit.id] == null) {
-                            findPathToResource(unit);
-                        }
-
-                        let step = paths[unit.id].step;
-
-                        if (step < paths[unit.id].path.length) {
-                            let shipX = unit.x + map_width - 1;
-                            let shipY = unit.y + map_width - 1;
-                            let nextPoint = paths[unit.id].path[step];
-                            let nextX = nextPoint[0];
-                            let nextY = nextPoint[1];
-                            let nextDirection = findDirection(shipX, shipY, nextX, nextY);
-                            paths[unit.id].step++;
-
-                            if (paths[unit.id].step == paths[unit.id].path.length) {
-                                commands.push({
-                                    command: 'GATHER',
-                                    dir: nextDirection,
-                                    unit: unit.id
-                                });
-
-                                paths[unit.id] = null;
-                            }
-                            else {
-                                commands.push({
-                                    command: 'MOVE',
-                                    dir: nextDirection,
-                                    unit: unit.id
-                                });
-                            }
-                        }
-                    }
-                }
-                else if (unit.status == 'moving') {
-                }
-            }
-        }
-        else if (unit.type == 'scout') {
-        }
-        else if (unit.type == 'tank') {
-
+        if (currentCommand != null) {
+            commands.push(currentCommand);
         }
     }
 
     return commands;
 }
 
-/* Structure...
-visited_tiles = {
-    x = {
-        y = {
-            tile_type: string,
-            visitedOnTurn: int
+function generateBaseCommand(currentUnit) {
+    if (currentUnit.status != "building") {
+        if (!isWaitingToBuild) {
+            isWaitingToBuild = true;
+
+            if (countToCreate.workers > 0) {
+                countToCreate.workers = countToCreate.workers - 1;
+                return {
+                    command: 'CREATE',
+                    type: 'worker'
+                };
+            }
+            else if (countToCreate.scouts > 0) {
+                countToCreate.scouts = countToCreate.scouts - 1;
+                return {
+                    command: 'CREATE',
+                    type: 'scout'
+                };
+            }
+            else if (countToCreate.tanks > 0) {
+                countToCreate.tanks = countToCreate.tanks - 1;
+                return {
+                    command: 'CREATE',
+                    type: 'tank'
+                };
+            }
         }
     }
-}
-
-based on tile_type, search on one of the following...
-
-resources = {
-    tile.resources.id = {
-        x: int,
-        y: int,
-        type: string,
-        total: int,
-        value: int
+    else {
+        isWaitingToBuild = false;
     }
 }
 
-enemy_units = {
-    tile.units.id = {
-        x: int,
-        y: int,
-        type: string,
-        status: string,
-        health: int
+function generateWorkerCommand(currentUnit) {
+    return {
+        command: 'MOVE',
+        dir: ['N','E','S','W'][Math.floor(Math.random() * 4)],
+        unit: currentUnit.id
+    };
+}
+
+function generateScoutCommand(currentUnit) {
+    if (currentStrategy == STRAT_EXPLORE) {
+        return {
+            command: 'MOVE',
+            dir: ['N','E','S','W'][Math.floor(Math.random() * 4)],
+            unit: currentUnit.id
+        };
+    }
+    else if (currentStrategy == STRAT_MINE) {
+
+    }
+    else if (currentStrategy == STRAT_ATTACK) {
+
+    }
+    else if (currentStrategy == STRAT_DEFEND) {
+
     }
 }
 
-enemy_base = {
-    x: int,
-    y: int
+function generateTankCommand(currentUnit) {
+    return {
+        command: 'MOVE',
+        dir: ['N','E','S','W'][Math.floor(Math.random() * 4)],
+        unit: currentUnit.id
+    };
 }
-*/
